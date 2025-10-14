@@ -3,7 +3,7 @@ pipeline {
 
     tools {
         maven 'Maven'       // Ensure a tool named 'Maven' is configured in Jenkins global tools
-        jdk 'OpenJDK11'     // Ensure a JDK tool configured or rely on system java
+        jdk 'OpenJDK11'     // Ensure a JDK tool is configured or rely on system java
     }
 
     environment {
@@ -15,12 +15,14 @@ pipeline {
     stages {
         stage('Checkout') {
             steps {
-                checkout scm
+                // Use explicit Git checkout instead of checkout scm
+                git branch: 'main', url: 'https://github.com/ChiraRakesh/python-cicd-pipeline-demo2.git'
             }
         }
 
         stage('Build') {
             steps {
+                echo 'Building project with Maven...'
                 sh 'mvn -B clean package'
             }
             post {
