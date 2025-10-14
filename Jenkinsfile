@@ -1,30 +1,32 @@
 pipeline {
     agent any
 
-    tools {
-        maven 'Maven'       // Ensure a tool named 'Maven' is configured in Jenkins global tools
-        jdk 'OpenJDK11'     // Ensure a JDK tool is configured or rely on system java
-    }
-
     environment {
-        // Tomcat URL/APP path
-        TOMCAT_URL = 'http://localhost:8080'   // replace with your Tomcat host or IP
-        APP_PATH   = '/myapp'                  // context path where WAR will be deployed
+        // Tomcat deployment details
+        TOMCAT_HOST = "13.222.130.188"       // Your Tomcat server IP
+        TOMCAT_PORT = "8080"
+        TOMCAT_USER = "jenkins"             // Tomcat Manager username
+        TOMCAT_PASS = credentials('tomcat-password') // Jenkins credential ID
+        APP_NAME = "myapp"
     }
 
     stages {
-        stage('Checkout') {
+
+        stage('Checkout SCM') {
             steps {
-                // Use explicit Git checkout instead of checkout scm
-                git branch: 'main', url: 'https://github.com/ChiraRakesh/python-cicd-pipeline-demo2.git'
+                // Use your Maven project repository
+                git url: 'https://github.com/ChiraRakesh/Maven_Project.git', branch: 'master'
             }
         }
 
         stage('Build') {
             steps {
-                echo 'Building project with Maven...'
-                sh 'mvn -B clean package'
+                echo "Building project with Maven..."
+                withMaven(maven: 'Maven 3') {
+                    sh 'mvn -B clean package'
+                }
             }
+
             post {
                 success {
                     archiveArtifacts artifacts: 'target/*.war', fingerprint: true
@@ -32,53 +34,47 @@ pipeline {
             }
         }
 
-        stage('Deploy to Tomcat (manager)') {
-            when {
-                expression { return env.TOMCAT_USE_SCP != 'true' }
-            }
+        stage('Deploy to Tomcat (Manager)') {
             steps {
-                withCredentials([usernamePassword(credentialsId: 'tomcat-creds', usernameVariable: 'TOMCAT_USER', passwordVariable: 'TOMCAT_PASS')]) {
-                    script {
-                        def war = sh(script: "ls target/*.war | head -n1", returnStdout: true).trim()
-                        if (!war) {
-                            error "WAR not found in target/"
-                        }
+                script {
+                    def warFile = "target/webapp.war"
 
-                        // Deploy via Tomcat manager text API
+                    if (!fileExists(warFile)) {
+                        error "WAR file not found: ${warFile}"
+                    }
+
+                    try {
                         sh """
-                            set -e
-                            curl --fail --upload-file ${war} \\
-                                 "${TOMCAT_URL}/manager/text/deploy?path=${APP_PATH}&update=true" \\
-                                 --user "${TOMCAT_USER}:${TOMCAT_PASS}"
+                        curl --fail --upload-file ${warFile} \
+                        http://${TOMCAT_HOST}:${TOMCAT_PORT}/manager/text/deploy?path=/${APP_NAME}&update=true \
+                        --user ${TOMCAT_USER}:${TOMCAT_PASS}
                         """
+                        echo "Deployment to Tomcat successful!"
+                    } catch (err) {
+                        error "Tomcat deployment failed: ${err}"
                     }
                 }
             }
         }
 
-        stage('Deploy to Tomcat (scp)') {
-            when {
-                expression { return env.TOMCAT_USE_SCP == 'true' }
-            }
-            steps {
-                sshagent(credentials: ['tomcat-ssh']) {
-                    script {
-                        def war = sh(script: "ls target/*.war | head -n1", returnStdout: true).trim()
-                        sh """
-                            scp -o StrictHostKeyChecking=no ${war} tomcat@localhost:/opt/tomcat/webapps/
-                            ssh -o StrictHostKeyChecking=no tomcat@localhost 'sudo systemctl restart tomcat'
-                        """
-                    }
-                }
-            }
-        }
     }
 
     post {
+        success {
+            echo "Pipeline completed successfully!"
+        }
         failure {
-            echo "Build failed! Email notifications are disabled for now."
-            // To enable email, configure SMTP in Jenkins and uncomment the following:
-            // mail to: 'dev-team@example.com', subject: "BUILD FAILED: ${env.JOB_NAME} #${env.BUILD_NUMBER}", body: "See console output: ${env.BUILD_URL}"
+            echo "Pipeline failed."
+            script {
+                try {
+                    // Optional email notification
+                    mail to: 'your.email@example.com',
+                         subject: "Jenkins Pipeline Failed: ${currentBuild.fullDisplayName}",
+                         body: "Check console output at ${env.BUILD_URL}"
+                } catch (err) {
+                    echo "Email failed (SMTP not configured): ${err}"
+                }
+            }
         }
     }
 }
