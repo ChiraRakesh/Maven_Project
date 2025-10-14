@@ -1,28 +1,30 @@
 pipeline {
     agent any
 
-    tools {
-        maven 'Maven'       // Ensure a tool named 'Maven' is configured in Jenkins global tools
-        jdk 'OpenJDK11'     // Ensure a JDK tool configured or rely on system java
-    }
-
     environment {
-        // Tomcat URL/APP path
-        TOMCAT_URL = 'http://tomcat.example.com:8080'   // replace with your Tomcat host (or http://localhost:8080 if same host)
-        APP_PATH = '/myapp'                              // context path where WAR will be deployed (/myapp -> myapp.war)
+        // Update these with your real values
+        TOMCAT_HOST = "192.168.1.100"      // Replace with your Tomcat server IP or hostname
+        TOMCAT_PORT = "8080"
+        TOMCAT_USER = "jenkins"            // Tomcat Manager user
+        TOMCAT_PASS = credentials('tomcat-password') // Jenkins credential ID
+        APP_NAME = "myapp"
     }
 
     stages {
-        stage('Checkout') {
+        stage('Checkout SCM') {
             steps {
-                checkout scm
+                git url: 'https://github.com/ChiraRakesh/Maven_Project.git', branch: 'master'
             }
         }
 
         stage('Build') {
             steps {
-                sh 'mvn -B clean package'
+                // Use Maven installed in Jenkins
+                withMaven(maven: 'Maven 3') {
+                    sh 'mvn clean package'
+                }
             }
+
             post {
                 success {
                     archiveArtifacts artifacts: 'target/*.war', fingerprint: true
@@ -30,42 +32,23 @@ pipeline {
             }
         }
 
-        stage('Deploy to Tomcat (manager)') {
-            when {
-                expression { return env.TOMCAT_USE_SCP != 'true' } // default: use manager; set TOMCAT_USE_SCP=true to use scp method
-            }
+        stage('Deploy to Tomcat') {
             steps {
-                withCredentials([usernamePassword(credentialsId: 'tomcat-creds', usernameVariable: 'TOMCAT_USER', passwordVariable: 'TOMCAT_PASS')]) {
-                    script {
-                        def war = sh(script: "ls target/*.war | head -n1", returnStdout: true).trim()
-                        if (!war) {
-                            error "WAR not found in target/"
-                        }
-                        // Deploy via Tomcat manager text API: update if exists
-                        sh """
-                            set -e
-                            curl --fail --upload-file ${war} \\
-                                 "${TOMCAT_URL}/manager/text/deploy?path=${APP_PATH}&update=true" \\
-                                 --user "${TOMCAT_USER}:${TOMCAT_PASS}"
-                        """
+                script {
+                    def warFile = "target/webapp.war"
+                    if (!fileExists(warFile)) {
+                        error "WAR file not found: ${warFile}"
                     }
-                }
-            }
-        }
 
-        stage('Deploy to Tomcat (scp)') {
-            when {
-                expression { return env.TOMCAT_USE_SCP == 'true' }
-            }
-            steps {
-                // requires SSH credentials added as 'tomcat-ssh' in Jenkins
-                sshagent(credentials: ['tomcat-ssh']) {
-                    script {
-                        def war = sh(script: "ls target/*.war | head -n1", returnStdout: true).trim()
+                    try {
                         sh """
-                            scp -o StrictHostKeyChecking=no ${war} tomcat@tomcat.example.com:/opt/tomcat/webapps/
-                            ssh -o StrictHostKeyChecking=no tomcat@tomcat.example.com 'sudo systemctl restart tomcat'
+                        curl --fail --upload-file ${warFile} \
+                        http://${TOMCAT_HOST}:${TOMCAT_PORT}/manager/text/deploy?path=/${APP_NAME}&update=true \
+                        --user ${TOMCAT_USER}:${TOMCAT_PASS}
                         """
+                        echo "Deployment successful!"
+                    } catch (err) {
+                        error "Deployment failed: ${err}"
                     }
                 }
             }
@@ -73,10 +56,15 @@ pipeline {
     }
 
     post {
+        success {
+            echo "Pipeline completed successfully!"
+        }
         failure {
-            mail to: 'dev-team@example.com',
-                 subject: "BUILD FAILED: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-                 body: "See console output: ${env.BUILD_URL}"
+            echo "Pipeline failed."
+            // Optional email notification
+            mail to: 'your.email@example.com',
+                 subject: "Jenkins Pipeline Failed: ${currentBuild.fullDisplayName}",
+                 body: "Check console output at ${env.BUILD_URL}"
         }
     }
 }
