@@ -1,70 +1,58 @@
 pipeline {
-    agent any
+  agent any
 
-    environment {
-        // Update these with your real values
-        TOMCAT_HOST = "192.168.1.100"      // Replace with your Tomcat server IP or hostname
-        TOMCAT_PORT = "8080"
-        TOMCAT_USER = "jenkins"            // Tomcat Manager user
-        TOMCAT_PASS = credentials('tomcat-password') // Jenkins credential ID
-        APP_NAME = "myapp"
+  tools {
+    maven 'Maven'      // Ensure a tool named 'Maven' is configured in Jenkins global tools
+    jdk 'OpenJDK11'    // Ensure a JDK tool configured or rely on system java
+  }
+
+  environment {
+    # Tomcat URL/APP path
+    TOMCAT_URL = 'http://tomcat.example.com:8080'   // replace with your Tomcat host (or http://localhost:8080 if same host)
+    APP_PATH = '/myapp'                             // context path where WAR will be deployed (/myapp -> myapp.war)
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        checkout scm
+      }
     }
 
-    stages {
-        stage('Checkout SCM') {
-            steps {
-                git url: 'https://github.com/ChiraRakesh/Maven_Project.git', branch: 'master'
-            }
-        }
-
-        stage('Build') {
-            steps {
-                // Use Maven installed in Jenkins
-                withMaven(maven: 'Maven 3') {
-                    sh 'mvn clean package'
-                }
-            }
-
-            post {
-                success {
-                    archiveArtifacts artifacts: 'target/*.war', fingerprint: true
-                }
-            }
-        }
-
-        stage('Deploy to Tomcat') {
-            steps {
-                script {
-                    def warFile = "target/webapp.war"
-                    if (!fileExists(warFile)) {
-                        error "WAR file not found: ${warFile}"
-                    }
-
-                    try {
-                        sh """
-                        curl --fail --upload-file ${warFile} \
-                        http://${TOMCAT_HOST}:${TOMCAT_PORT}/manager/text/deploy?path=/${APP_NAME}&update=true \
-                        --user ${TOMCAT_USER}:${TOMCAT_PASS}
-                        """
-                        echo "Deployment successful!"
-                    } catch (err) {
-                        error "Deployment failed: ${err}"
-                    }
-                }
-            }
-        }
-    }
-
-    post {
+    stage('Build') {
+      steps {
+        sh 'mvn -B clean package'
+      }
+      post {
         success {
-            echo "Pipeline completed successfully!"
+          archiveArtifacts artifacts: 'target/*.war', fingerprint: true
         }
-        failure {
-            echo "Pipeline failed."
-            // Optional email notification
-            mail to: 'your.email@example.com',
-                 subject: "Jenkins Pipeline Failed: ${currentBuild.fullDisplayName}",
-                 body: "Check console output at ${env.BUILD_URL}"
-        }
+      }
     }
-}
+
+    stage('Deploy to Tomcat (manager)') {
+      when {
+        expression { return env.TOMCAT_USE_SCP != 'true' } // default: use manager; set TOMCAT_USE_SCP=true to use scp method
+      }
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'tomcat-creds', usernameVariable: 'jenkins', passwordVariable: 'StrongTomcatPassHere')]) {
+          script {
+            def war = sh(script: "ls target/*.war | head -n1", returnStdout: true).trim()
+            if (!war) {
+              error "WAR not found in target/"
+            }
+            // Deploy via Tomcat manager text API: update if exists
+            sh """
+              set -e
+              curl --fail --upload-file ${war} \\
+                   "${TOMCAT_URL}/manager/text/deploy?path=${APP_PATH}&update=true" \\
+                   --user "${TOMCAT_USER}:${TOMCAT_PASS}"
+            """
+          }
+        }
+      }
+    }
+
+    stage('Deploy to Tomcat (scp)') {
+      when {
+        expression { return env.TOMCAT_USE_SCP == 'true' }
