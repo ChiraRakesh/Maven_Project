@@ -25,3 +25,40 @@ pipeline {
                 sh "mvn clean package"
             }
         }
+
+        stage('Backup Old WAR') {
+            steps {
+                echo "Backing up previous WAR..."
+                sh """
+                if [ -f ${TOMCAT_HOME}/webapps/${APP_NAME}.war ]; then
+                    mkdir -p ${TOMCAT_HOME}/webapps/backup
+                    cp ${TOMCAT_HOME}/webapps/${APP_NAME}.war ${TOMCAT_HOME}/webapps/backup/${APP_NAME}_\$(date +%Y%m%d%H%M%S).war
+                    echo "Backup created"
+                else
+                    echo "No previous WAR found, skipping backup"
+                fi
+                """
+            }
+        }
+
+        stage('Deploy to Tomcat') {
+            steps {
+                echo "Deploying WAR to Tomcat..."
+                sh """
+                cp target/*.war ${TOMCAT_HOME}/webapps/${APP_NAME}.war
+                ${TOMCAT_HOME}/bin/shutdown.sh || true
+                ${TOMCAT_HOME}/bin/startup.sh
+                """
+            }
+        }
+    } // end stages
+
+    post {
+        success {
+            echo "Deployment Successful! Access your app at http://<server-ip>:8080/${APP_NAME}"
+        }
+        failure {
+            echo "Deployment Failed! Check Jenkins logs for details."
+        }
+    }
+} // end pipeline
